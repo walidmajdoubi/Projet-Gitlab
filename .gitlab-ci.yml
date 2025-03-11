@@ -1,0 +1,115 @@
+stages:
+- build
+- test
+- release
+- deploy
+
+variables:
+  IMAGE_NAME: "projet-gitlab"
+  IMAGE_TAG: "V1"
+  DOCKER_USERNAME: "walidmajdoubi"
+  #DOCKER_PASSWORD:
+  Host-PORT:80
+  Container-PORT:80
+  SERVER_USERNAME: "ubuntu"
+
+  # build de l'image
+  Build:
+    stage: build
+    image:docker:latest
+    services:
+      - name: docker:dind
+        alias: docker
+    script:
+      - docker build -- no-cache -t $IMAGE_NAME:$IMAGE_TAG .
+      - docker save -o projet-gitlab.tar $IMAGE_NAME:$IMAGE_TAG
+      artifacts:
+        paths:
+          - projet-gitlab.tar
+
+.test_templates: &test_templates
+  stage: test
+  before_script:
+    - apk add --no-cache curl
+    script:
+      - docker load -i projet-gitlab.tar
+  services:
+    - name: docker:dind
+      alias: docker
+  script:
+    - docker load -i projet-gitlab.tar
+    - docker run -- rm -dp $Host-PORT:$Container-PORT --name $IMAGE_NAME:$IMAGE_TAG
+    - sleep 5
+    - curl -I "http://docker" |grep -i 200
+
+Test:
+  stage: test
+  image: docker:latest
+  services:
+    - name: docker:dind
+      alias: docker
+  <<: *test_templates
+
+.release_image: &release_image
+  stage: release
+    - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdinn
+    - docker login -u $DOCKER_USERNAME -p $DOCKER_PASSWORD
+    - docker tag $IMAGE_NAME:$IMAGE_TAG $DOCKER_USERNAME/$IMAGE_NAME:$IMAGE_TAG
+    - docker push $DOCKER_USERNAME/$IMAGE_NAME:$IMAGE_TAG
+
+Release Image:
+  stage: release
+  image: docker:latest
+  services:
+    - name: docker:dind
+      alias: docker
+  <<: *release_image
+
+.deploy_app: &deploy_app
+  stage: deploy
+  before_script:
+    - apk add --no-cache openssh-client
+    - eval $(ssh-agent -s)
+    - echo "$SSH_PRIVATE_KEY" > base64 -d > /tmp/id_rsa
+    - chmod 600 /tmp/id_rsa
+    - ssh-add /tmp/id_rsa
+    - mkdir -p ~/.ssh
+    - chmod 700 ~/.ssh
+    - Echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config
+  script:
+   - ssh -o StrictHostKeyChecking=no -i /tmp/id_rsa $SERVER_USERNAME@$SERVER_IP "docker pull $DOCKER_USERNAME/$IMAGE_NAME:$IMAGE_TAG"
+   - ssh -o StrictHostKeyChecking=no -i /tmp/id_rsa $SERVER_USERNAME@$SERVER_IP "docker run --rm -dp $Host-PORT:$Container-PORT --name $IMAGE_NAME:$IMAGE_TAG"
+
+Deploy review:
+  stage: deploy
+  variables:
+    SERVER_IP: "
+  image: alpine
+  <<: *deploy_app
+  environnement:
+    name: review
+
+
+    Deploy Staging:
+  stage: deploy
+  variables:
+    SERVER_IP: "
+  image: alpine
+  <<: *deploy_app
+  environnement:
+    name: Staging
+
+
+    Deploy Production:
+  stage: deploy
+  variables:
+    SERVER_IP: "
+  image: alpine
+  <<: *deploy_app
+  environnement:
+    name: production
+
+  services:
+    - name: docker:dind
+      alias: docker
+  <<: *deploy_app
